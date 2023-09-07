@@ -27,7 +27,7 @@ class AUMRecord:
 
 
 class AUMCalculator():
-    def __init__(self, save_dir: str, compressed: bool = True):
+    def __init__(self, save_dir: str, compressed: bool = True, order: callable = None, reverse = True):
         """
         Intantiates the AUM object
 
@@ -40,17 +40,26 @@ class AUMCalculator():
             storing an AUMRecord per sample per update call. This will also result in a
             `full_aum_records.csv` being saved out when calling `finalize`.
             Defaults to True.
+        :param order (callable): If a order function is given, apply it once to each list item 
+            and sort them, ascending or descending, according to their function values.
+            By default, aum is used for sorting.
+        :param reverse (bool): The reverse flag can be set to sort in descending order. Defaults to True.
         """
         self.save_dir = save_dir
         self.counts = defaultdict(int)
         self.sums = defaultdict(float)
+        if order is None:
+            self.order = lambda x :(x[1].aum,x[0])
+        else:
+            self.order = order
+        self.reverse = reverse
 
         self.compressed = compressed
         if not compressed:
             self.records = []
 
     def update(self, logits: torch.Tensor, targets: torch.Tensor,
-               sample_ids: List[sample_identifier]) -> Dict[sample_identifier, AUMRecord]:
+               sample_ids: List[sample_identifier] = None) -> Dict[sample_identifier, AUMRecord]:
         """
         Updates the running totals and calculates the AUM values for the given samples
 
@@ -59,7 +68,8 @@ class AUMCalculator():
         :param targets (torch.Tensor): A 1 dimensional tensor containing the index of the target
             logit for a given sample.
         :param sample_ids (List[sample_identifier]): A list mapping each row of the logits & targets
-            tensors to a sample id. This can be a list of ints or strings.
+            tensors to a sample id. This can be a list of ints or strings. If None, the sample id will 
+            be marked by the number of samples.
 
         :return (Dict[sample_identifier, AUMRecord]): A dictionary mapping each sample identifier
             to an AUMRecord. The AUMRecord contains the current AUM data for the given sample after
@@ -67,6 +77,9 @@ class AUMCalculator():
         """
 
         target_values = logits.gather(1, targets.view(-1, 1)).squeeze()
+        
+        if sample_ids is None:
+            sample_ids = [i for i in range(targets.shape[0])]
 
         # mask out target values
         masked_logits = torch.scatter(logits, 1, targets.view(-1, 1), float('-inf'))
@@ -93,7 +106,9 @@ class AUMCalculator():
             updated_aums[sample_id] = record
             if not self.compressed:
                 self.records.append(record)
-
+            
+        updated_aums=dict(sorted(updated_aums.items(),key=self.order,reverse=self.reverse))
+        
         return updated_aums
 
     def finalize(self, save_dir: Optional[str] = None) -> None:
