@@ -57,6 +57,8 @@ class AUMCalculator():
         self.compressed = compressed
         if not compressed:
             self.records = []
+            
+        self.updated_aums={}
 
     def update(self, logits: torch.Tensor, targets: torch.Tensor,
                sample_ids: List[sample_identifier] = None) -> Dict[sample_identifier, AUMRecord]:
@@ -89,7 +91,6 @@ class AUMCalculator():
 
         margin_values = (target_values - other_logit_values).tolist()
 
-        updated_aums = {}
         for i, (sample_id, margin) in enumerate(zip(sample_ids, margin_values)):
             self.counts[sample_id] += 1
             self.sums[sample_id] += margin
@@ -103,13 +104,51 @@ class AUMCalculator():
                                margin=margin,
                                aum=self.sums[sample_id] / self.counts[sample_id])
 
-            updated_aums[sample_id] = record
+            self.updated_aums[sample_id] = record
             if not self.compressed:
                 self.records.append(record)
             
-        updated_aums=dict(sorted(updated_aums.items(),key=self.order,reverse=self.reverse))
+        self.updated_aums=dict(sorted(self.updated_aums.items(),key=self.order,reverse=self.reverse))
         
-        return updated_aums
+        return self.updated_aums
+    
+    def clear(self) -> None:
+        """
+        clear the `records` and set the all `counts` and `sums` to zero
+        """
+        self.counts = defaultdict(int)
+        self.sums = defaultdict(float)
+        self.updated_aums = {}
+        
+    def greaterThanAlpha(self, alpha: float) -> Dict[sample_identifier, AUMRecord]:
+        """
+        Identify labeled data using `alpha` as a threshold
+        
+        :param alpha(float): the threshold sample AUM
+        """
+        samples={}
+        
+        for id,sample in self.updated_aums.items():
+            if sample.aum > alpha:
+                samples[id]=sample
+            else:
+                return samples
+        
+    def topK(self,top: float) -> Dict[sample_identifier, AUMRecord]:
+        """
+        Returns the calculation according to the sorting method in the AUM top ` top * len (updated_aums) ` number of data
+        
+        :param top(float): top in [0.,1.]
+        
+        :return (Dict[sample_identifier, AUMRecord]): A dictionary mapping each sample identifier
+            to an AUMRecord. After this update step is called, AUMRecord contains the `top * len (updated_aums)`
+            of the current AUM data for a given sample.
+        """
+        if len(self.updated_aums) == 0:
+            raise("No data in AUMs")
+        else:
+            bound = int(top * len(self.updated_aums))
+            return dict(list(self.updated_aums.items())[:bound])
 
     def finalize(self, save_dir: Optional[str] = None) -> None:
         """
